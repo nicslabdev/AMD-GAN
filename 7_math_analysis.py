@@ -1,0 +1,706 @@
+"""
+Script: Análisis Matemático - Distancia de Wasserstein y MMD por Class
+
+Calcula para cada dataset (CIC-IDS2017, UNSW-NB15, Edge-IIoT 2022):
+  - Distancia de Wasserstein empírica (1D, por feature y promediada) por class
+  - MMD (Maximum Mean Discrepancy) multivariante por class
+
+Compara las distribuciones de data reales vs data synthetics generados
+por la WGAN, class a class.
+
+Usage:
+    python 7_math_analysis.py                  # Analiza todos los datasets
+    python 7_math_analysis.py --dataset cicids # Solo CIC-IDS2017
+    python 7_math_analysis.py --dataset unsw   # Solo UNSW-NB15
+    python 7_math_analysis.py --dataset edge   # Solo Edge-IIoT 2022
+"""
+
+import os
+import sys
+import argparse
+import json
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from scipy.stats import wasserstein_distance
+from sklearn.preprocessing import MinMaxScaler
+import warnings
+warnings.filterwarnings('ignore')
+
+# ----------------------------
+# Configuration global
+# ----------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(BASE_DIR, 'results_math_analysis')
+RANDOM_STATE = 42
+
+# ============================================================
+# Rutas y configuration por dataset
+# ============================================================
+DATASETS_CONFIG = {
+    'cicids': {
+        'nombre': 'CIC-IDS2017',
+        'real_path': '<PATH_TO_CICIDS2017_CSV>',
+        'synth_dir': os.path.join(BASE_DIR, 'generated_datasets'),
+        'label_col_real': 'Attack Type',
+        'label_col_synth': 'Attack Type',
+        'label_col_fallback': 'Label_Class',
+        'use_polars': True,
+        'features_base': [
+            'Source Port', 'Destination Port', 'Protocol',
+            'Total Fwd Packets', 'Total Backward Packets',
+            'Total Length of Fwd Packets', 'Total Length of Bwd Packets',
+            'Flow Duration', 'Flow IAT Mean', 'Flow IAT Std',
+            'Fwd IAT Mean', 'Bwd IAT Mean',
+            'Fwd Packet Length Mean', 'Bwd Packet Length Mean',
+            'Packet Length Std', 'Max Packet Length',
+            'SYN Flag Count', 'ACK Flag Count', 'FIN Flag Count',
+            'RST Flag Count', 'PSH Flag Count',
+        ],
+        'ip_columns': {
+            'Source IP': 'Src_IP',
+            'Destination IP': 'Dst_IP',
+        },
+        'drop_label_cols': ['Label', 'Attack Type', 'Label_Class'],
+    },
+    'unsw': {
+        'nombre': 'UNSW-NB15',
+        'real_path': '<PATH_TO_UNSWNB15_CSV>',
+        'synth_dir': os.path.join(BASE_DIR, 'generated_datasets_unsw'),
+        'label_col_real': 'Label',
+        'label_col_synth': 'Label',
+        'label_col_fallback': 'Label_Class',
+        'use_polars': True,
+        'features_base': [
+            'Src Port', 'Dst Port', 'Protocol',
+            'Total Fwd Packet', 'Total Bwd packets',
+            'Total Length of Fwd Packet', 'Total Length of Bwd Packet',
+            'Flow Duration', 'Flow IAT Mean', 'Flow IAT Std',
+            'Fwd IAT Mean', 'Bwd IAT Mean',
+            'Fwd Packet Length Mean', 'Bwd Packet Length Mean',
+            'Packet Length Std', 'Packet Length Max',
+            'SYN Flag Count', 'ACK Flag Count', 'FIN Flag Count',
+            'RST Flag Count', 'PSH Flag Count',
+        ],
+        'ip_columns': {
+            'Src IP': 'Src_IP',
+            'Dst IP': 'Dst_IP',
+        },
+        'drop_label_cols': ['Label', 'Label_Class'],
+    },
+    'edge': {
+        'nombre': 'Edge-IIoT 2022',
+        'real_path': '<PATH_TO_EDGEIIOT_CSV>',
+        'synth_dir': os.path.join(BASE_DIR, 'generated_datasets_edgeiiot'),
+        'label_col_real': 'Attack_type',
+        'label_col_synth': 'Attack_type',
+        'label_col_fallback': 'Label_Class',
+        'use_polars': False,
+        'features_base': [
+            'arp.opcode', 'arp.hw.size',
+            'icmp.checksum', 'icmp.seq_le', 'icmp.transmit_timestamp', 'icmp.unused',
+            'http.file_data', 'http.content_length', 'http.request.uri.query',
+            'http.request.method', 'http.referer', 'http.request.full_uri',
+            'http.request.version', 'http.response', 'http.tls_port',
+            'tcp.ack', 'tcp.ack_raw', 'tcp.checksum',
+            'tcp.connection.fin', 'tcp.connection.rst', 'tcp.connection.syn',
+            'tcp.connection.synack', 'tcp.dstport', 'tcp.flags', 'tcp.flags.ack',
+            'tcp.len', 'tcp.seq', 'tcp.srcport',
+            'udp.port', 'udp.stream', 'udp.time_delta',
+            'dns.qry.name', 'dns.qry.name.len', 'dns.qry.qu', 'dns.qry.type',
+            'dns.retransmission', 'dns.retransmit_request', 'dns.retransmit_request_in',
+            'mqtt.conflag.cleansess', 'mqtt.conflags', 'mqtt.hdrflags',
+            'mqtt.len', 'mqtt.msg_decoded_as', 'mqtt.msgtype',
+            'mqtt.proto_len', 'mqtt.topic_len', 'mqtt.ver',
+            'mbtcp.len', 'mbtcp.trans_id', 'mbtcp.unit_id',
+        ],
+        'ip_columns': {
+            'ip.src_host': 'Src_IP',
+            'ip.dst_host': 'Dst_IP',
+        },
+        'drop_label_cols': ['Label', 'Label_Class', 'Attack_type', 'Attack_label'],
+        'valid_classes': [
+            'Normal', 'DDoS_UDP', 'DDoS_ICMP', 'SQL_injection', 'Password',
+            'Vulnerability_scanner', 'DDoS_TCP', 'DDoS_HTTP', 'Uploading',
+            'Backdoor', 'Port_Scanning', 'XSS', 'Ransomware', 'MITM', 'Fingerprinting'
+        ],
+    },
+}
+
+
+# ============================================================
+# Metrics Matemáticas
+# ============================================================
+
+def wasserstein_per_feature(X_real: np.ndarray, X_synth: np.ndarray) -> np.ndarray:
+    """
+    Calcula la distancia de Wasserstein-1 (Earth Mover's Distance)
+    para cada feature (columna) de forma independiente.
+
+    W_1(P, Q) = inf_{γ ∈ Γ(P,Q)} E_{(x,y)~γ}[||x - y||]
+
+    En 1D esto equivale a:
+        W_1(P, Q) = ∫₀¹ |F_P⁻¹(q) - F_Q⁻¹(q)| dq
+
+    donde F_P⁻¹ y F_Q⁻¹ son las funciones cuantil (inversas de la CDF).
+
+    Returns:
+        Array de shape (n_features,) con W_1 por feature.
+    """
+    n_features = X_real.shape[1]
+    distances = np.zeros(n_features)
+    for j in range(n_features):
+        distances[j] = wasserstein_distance(X_real[:, j], X_synth[:, j])
+    return distances
+
+
+def mmd_rbf(X: np.ndarray, Y: np.ndarray, gamma: float = None) -> float:
+    """
+    Calcula el MMD² (Maximum Mean Discrepancy) multivariante
+    con kernel RBF (Gaussiano).
+
+    MMD²(P, Q) = E[k(x, x')] - 2·E[k(x, y)] + E[k(y, y')]
+
+    donde k(a, b) = exp(-γ · ||a - b||²)
+
+    Si gamma=None, se usa la heurística de la mediana:
+        γ = 1 / (2 · median(||x_i - x_j||²))
+
+    Para samples grandes se usa subsampling para eficiencia.
+
+    Args:
+        X: Muestras de la distribution real, shape (n, d)
+        Y: Muestras de la distribution sintética, shape (m, d)
+        gamma: Parámetro del kernel RBF. Si None, se calcula automáticamente.
+
+    Returns:
+        MMD² (float). Valores más cercanos a 0 indican distribuciones más similares.
+    """
+    # Subsampling para eficiencia si hay muchas samples
+    MAX_SAMPLES = 5000
+    if len(X) > MAX_SAMPLES:
+        rng = np.random.RandomState(RANDOM_STATE)
+        idx = rng.choice(len(X), MAX_SAMPLES, replace=False)
+        X = X[idx]
+    if len(Y) > MAX_SAMPLES:
+        rng = np.random.RandomState(RANDOM_STATE + 1)
+        idx = rng.choice(len(Y), MAX_SAMPLES, replace=False)
+        Y = Y[idx]
+
+    # Heurística de la mediana para gamma
+    if gamma is None:
+        # Subsample para calcular mediana eficientemente
+        n_sub = min(1000, len(X), len(Y))
+        rng = np.random.RandomState(RANDOM_STATE + 2)
+        X_sub = X[rng.choice(len(X), n_sub, replace=False)]
+        Y_sub = Y[rng.choice(len(Y), n_sub, replace=False)]
+        XY = np.vstack([X_sub, Y_sub])
+        # Calcular distancias al cuadrado entre pares
+        dists_sq = np.sum((XY[:, None, :] - XY[None, :, :]) ** 2, axis=-1)
+        median_dist_sq = np.median(dists_sq[dists_sq > 0])
+        if median_dist_sq == 0:
+            median_dist_sq = 1.0
+        gamma = 1.0 / (2.0 * median_dist_sq)
+
+    # Calcular kernel matrices por bloques para eficiencia en memoria
+    def rbf_kernel_mean(A, B, gamma):
+        """Calcula E[k(a, b)] para a ∈ A, b ∈ B sin construir la matriz completa."""
+        BLOCK = 1000
+        total = 0.0
+        count = 0
+        for i in range(0, len(A), BLOCK):
+            A_block = A[i:i+BLOCK]
+            for j in range(0, len(B), BLOCK):
+                B_block = B[j:j+BLOCK]
+                # ||a - b||² = ||a||² + ||b||² - 2·a·b^T
+                sq_A = np.sum(A_block ** 2, axis=1, keepdims=True)
+                sq_B = np.sum(B_block ** 2, axis=1, keepdims=True)
+                D_sq = sq_A + sq_B.T - 2.0 * A_block @ B_block.T
+                K = np.exp(-gamma * D_sq)
+                total += K.sum()
+                count += K.size
+        return total / count
+
+    # MMD² = E[k(x,x')] - 2·E[k(x,y)] + E[k(y,y')]
+    Kxx = rbf_kernel_mean(X, X, gamma)
+    Kxy = rbf_kernel_mean(X, Y, gamma)
+    Kyy = rbf_kernel_mean(Y, Y, gamma)
+
+    mmd_sq = Kxx - 2.0 * Kxy + Kyy
+    return float(max(mmd_sq, 0.0))
+
+
+# ============================================================
+# Carga y preparación de data
+# ============================================================
+
+def cargar_data_reales(config: dict) -> pd.DataFrame:
+    """Carga el dataset real según la configuration."""
+    print(f"\n  Loading real data: {config['real_path']}")
+
+    if not os.path.exists(config['real_path']):
+        print(f"  [ERROR] Archivo no encontrado: {config['real_path']}")
+        return None
+
+    start = datetime.now()
+    if config.get('use_polars', False):
+        import polars as pl
+        df = pl.read_csv(config['real_path'], low_memory=False).to_pandas()
+    else:
+        df = pd.read_csv(config['real_path'], low_memory=False)
+
+    df.columns = df.columns.str.strip()
+    print(f"  Cargado en {datetime.now() - start} — {len(df):,} rows")
+    return df
+
+
+def detectar_label_col(df: pd.DataFrame, config: dict) -> str:
+    """Detecta la columna de label en un DataFrame."""
+    for col in [config['label_col_synth'], config['label_col_real'],
+                config.get('label_col_fallback', 'Label_Class'), 'Label_Class', 'Label']:
+        if col in df.columns:
+            return col
+    raise ValueError(f"No se encontró columna de label. Columnas: {df.columns.tolist()}")
+
+
+def preparar_features(df: pd.DataFrame, config: dict) -> tuple:
+    """
+    Prepara un DataFrame extrayendo features numéricas + IPs expandidas.
+    Returns: (X: np.ndarray, y: np.ndarray de strings, feature_names: list)
+    """
+    df = df.copy()
+    df.columns = df.columns.str.strip()
+
+    label_col = detectar_label_col(df, config)
+    labels = df[label_col].astype(str).values
+
+    # Filtrar classs válidas si se especifica
+    if 'valid_classes' in config:
+        mask = np.isin(labels, config['valid_classes'])
+        df = df.loc[mask].copy()
+        labels = labels[mask]
+
+    # Features base disponibles
+    features_avail = [f for f in config['features_base'] if f in df.columns]
+    result = df[features_avail].copy()
+    for col in result.columns:
+        result[col] = pd.to_numeric(result[col], errors='coerce').fillna(0)
+
+    feature_names = list(features_avail)
+
+    # Expand IPs to octets
+    for ip_col, prefix in config.get('ip_columns', {}).items():
+        if ip_col in df.columns:
+            octetos = df[ip_col].astype(str).str.split('.', expand=True)
+            for i in range(4):
+                col_name = f'{prefix}_{i+1}'
+                result[col_name] = pd.to_numeric(
+                    octetos[i] if i < octetos.shape[1] else 0,
+                    errors='coerce'
+                ).fillna(0).astype(float)
+                feature_names.append(col_name)
+
+    # Agregar octetos de IP faltantes (para synthetics que ya los tienen)
+    for prefix in set(config.get('ip_columns', {}).values()):
+        for i in range(4):
+            col_name = f'{prefix}_{i+1}'
+            if col_name in df.columns and col_name not in result.columns:
+                result[col_name] = pd.to_numeric(df[col_name], errors='coerce').fillna(0)
+                if col_name not in feature_names:
+                    feature_names.append(col_name)
+
+    result.replace([np.inf, -np.inf], np.nan, inplace=True)
+    result.fillna(0, inplace=True)
+
+    X = result.values.astype(np.float64)
+    X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
+
+    # Re-filtrar labels tras posibles cambios de índice
+    if 'valid_classes' in config:
+        labels = df[label_col].astype(str).values
+
+    return X, labels, feature_names
+
+
+def listar_datasets_sinteticos(synth_dir: str) -> list:
+    """Lista los datasets synthetics CSV disponibles en un directorio."""
+    if not os.path.exists(synth_dir):
+        return []
+    csvs = sorted([f for f in os.listdir(synth_dir) if f.endswith('.csv')])
+    return csvs
+
+
+# ============================================================
+# Análisis por dataset
+# ============================================================
+
+def analizar_dataset(ds_key: str, config: dict):
+    """
+    Ejecuta el análisis completo de Wasserstein + MMD para un dataset.
+    Para cada dataset synthetic disponible, compara por class con los data reales.
+    """
+    print("\n" + "=" * 100)
+    print(f"  ANÁLISIS MATEMÁTICO: {config['nombre']}")
+    print("=" * 100)
+
+    # --- Cargar data reales ---
+    df_real = cargar_data_reales(config)
+    if df_real is None:
+        return
+
+    X_real, y_real, feature_names_real = preparar_features(df_real, config)
+    classs_reales = sorted(np.unique(y_real))
+    print(f"  Classs reales ({len(classs_reales)}): {classs_reales}")
+    print(f"  Features: {len(feature_names_real)}")
+
+    del df_real  # free memoria
+
+    # --- Listar datasets synthetics ---
+    synth_files = listar_datasets_sinteticos(config['synth_dir'])
+    if not synth_files:
+        print(f"  [WARN] No hay datasets synthetics en {config['synth_dir']}")
+        return
+
+    print(f"\n  Datasets synthetics encontrados ({len(synth_files)}):")
+    for f in synth_files:
+        print(f"    - {f}")
+
+    # --- Results globales ---
+    all_results = []
+
+    for synth_file in synth_files:
+        synth_name = synth_file.replace('.csv', '')
+        synth_path = os.path.join(config['synth_dir'], synth_file)
+
+        print(f"\n{'─' * 90}")
+        print(f"  Dataset synthetic: {synth_name}")
+        print(f"{'─' * 90}")
+
+        df_synth = pd.read_csv(synth_path)
+        df_synth.columns = df_synth.columns.str.strip()
+        X_synth, y_synth, feature_names_synth = preparar_features(df_synth, config)
+        del df_synth
+
+        # Alinear features comunes
+        common_features = sorted(set(feature_names_real) & set(feature_names_synth))
+        idx_real = [feature_names_real.index(f) for f in common_features]
+        idx_synth = [feature_names_synth.index(f) for f in common_features]
+
+        X_real_aligned = X_real[:, idx_real]
+        X_synth_aligned = X_synth[:, idx_synth]
+
+        print(f"  Features comunes: {len(common_features)}")
+
+        classs_synth = sorted(np.unique(y_synth))
+        classs_comunes = sorted(set(classs_reales) & set(classs_synth))
+        print(f"  Classs comunes: {len(classs_comunes)} — {classs_comunes}")
+
+        # Normalizar conjuntamente para metrics comparables
+        scaler = MinMaxScaler()
+        X_all = np.vstack([X_real_aligned, X_synth_aligned])
+        scaler.fit(X_all)
+        X_real_scaled = scaler.transform(X_real_aligned)
+        X_synth_scaled = scaler.transform(X_synth_aligned)
+
+        del X_all
+
+        # --- Análisis por class ---
+        print(f"\n  {'Class':<25} {'N_real':>8} {'N_synth':>8} {'W1_mean':>10} "
+              f"{'W1_median':>10} {'W1_max':>10} {'MMD²':>12}")
+        print(f"  {'─'*25} {'─'*8} {'─'*8} {'─'*10} {'─'*10} {'─'*10} {'─'*12}")
+
+        for class in classs_comunes:
+            mask_real = (y_real == class)
+            mask_synth = (y_synth == class)
+            Xr = X_real_scaled[mask_real]
+            Xs = X_synth_scaled[mask_synth]
+
+            n_real = len(Xr)
+            n_synth = len(Xs)
+
+            if n_real < 2 or n_synth < 2:
+                print(f"  {class:<25} {n_real:>8,} {n_synth:>8,}  (insuficientes samples)")
+                all_results.append({
+                    'Dataset': config['nombre'],
+                    'Synthetic_Dataset': synth_name,
+                    'Class': class,
+                    'N_Real': n_real,
+                    'N_Synthetic': n_synth,
+                    'W1_Mean': np.nan,
+                    'W1_Median': np.nan,
+                    'W1_Max': np.nan,
+                    'W1_Std': np.nan,
+                    'MMD2': np.nan,
+                })
+                continue
+
+            # Distancia de Wasserstein empírica por feature
+            w1_per_feat = wasserstein_per_feature(Xr, Xs)
+            w1_mean = np.mean(w1_per_feat)
+            w1_median = np.median(w1_per_feat)
+            w1_max = np.max(w1_per_feat)
+            w1_std = np.std(w1_per_feat)
+
+            # MMD multivariante
+            mmd2 = mmd_rbf(Xr, Xs)
+
+            print(f"  {class:<25} {n_real:>8,} {n_synth:>8,} {w1_mean:>10.6f} "
+                  f"{w1_median:>10.6f} {w1_max:>10.6f} {mmd2:>12.8f}")
+
+            # Detail por feature
+            feature_details = {}
+            for k, feat in enumerate(common_features):
+                feature_details[feat] = float(w1_per_feat[k])
+
+            all_results.append({
+                'Dataset': config['nombre'],
+                'Synthetic_Dataset': synth_name,
+                'Class': class,
+                'N_Real': n_real,
+                'N_Synthetic': n_synth,
+                'W1_Mean': w1_mean,
+                'W1_Median': w1_median,
+                'W1_Max': w1_max,
+                'W1_Std': w1_std,
+                'MMD2': mmd2,
+                **{f'W1_{feat}': dist for feat, dist in feature_details.items()},
+            })
+
+        # --- Summary global del dataset synthetic ---
+        df_res = pd.DataFrame([r for r in all_results
+                                if r['Synthetic_Dataset'] == synth_name
+                                and not np.isnan(r.get('W1_Mean', np.nan))])
+
+        if len(df_res) > 0:
+            print(f"\n  ── Summary {synth_name} ──")
+            print(f"     W1 Mean (proaverage classs):  {df_res['W1_Mean'].mean():.6f}")
+            print(f"     W1 Mean (peor class):       {df_res['W1_Mean'].max():.6f}")
+            print(f"     MMD² (proaverage classs):     {df_res['MMD2'].mean():.8f}")
+            print(f"     MMD² (peor class):          {df_res['MMD2'].max():.8f}")
+
+    return all_results
+
+
+# ============================================================
+# Generación de reports
+# ============================================================
+
+def generar_summary_txt(all_results: list, output_dir: str):
+    """Genera un summary legible en texto plano."""
+    lines = []
+    lines.append("=" * 120)
+    lines.append(" " * 20 + "ANÁLISIS MATEMÁTICO: WASSERSTEIN + MMD — DATOS REALES vs SINTÉTICOS")
+    lines.append(" " * 45 + f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("=" * 120)
+
+    lines.append("\n" + "─" * 120)
+    lines.append("METODOLOGÍA")
+    lines.append("─" * 120)
+    lines.append("  Distancia de Wasserstein empírica (W₁):")
+    lines.append("    W₁(P, Q) = ∫₀¹ |F_P⁻¹(q) − F_Q⁻¹(q)| dq")
+    lines.append("    Se calcula por feature (1D) y se reportan estadísticos agregados (media, mediana, máx).")
+    lines.append("    Data normalizados conjuntamente con MinMaxScaler antes del cálculo.")
+    lines.append("    Rango: [0, 1]. Valores más bajos → distribuciones más similares.")
+    lines.append("")
+    lines.append("  MMD² multivariante (Maximum Mean Discrepancy):")
+    lines.append("    MMD²(P, Q) = E[k(x,x')] − 2·E[k(x,y)] + E[k(y,y')]")
+    lines.append("    Kernel RBF: k(a, b) = exp(−γ · ||a − b||²)")
+    lines.append("    γ estimada con la heurística de la mediana.")
+    lines.append("    Captura diferencias multivariantes (correlaciones entre features).")
+    lines.append("    Valores más bajos → distribuciones más similares.")
+    lines.append("")
+
+    # Agrupar por dataset
+    df_all = pd.DataFrame(all_results)
+    if df_all.empty:
+        lines.append("\n  Sin results.")
+        with open(os.path.join(output_dir, 'RESUMEN_MATH_ANALYSIS.txt'), 'w') as f:
+            f.write("\n".join(lines))
+        return
+
+    for ds_name in df_all['Dataset'].unique():
+        df_ds = df_all[df_all['Dataset'] == ds_name]
+
+        lines.append("\n" + "=" * 120)
+        lines.append(f"  DATASET: {ds_name}")
+        lines.append("=" * 120)
+
+        for synth_name in df_ds['Synthetic_Dataset'].unique():
+            df_s = df_ds[df_ds['Synthetic_Dataset'] == synth_name]
+
+            lines.append(f"\n  ┌─ Dataset Sintético: {synth_name}")
+            lines.append(f"  │")
+
+            # Table de results
+            lines.append(f"  │  {'Class':<25} {'N_real':>8} {'N_synth':>8} "
+                         f"{'W1_mean':>10} {'W1_med':>10} {'W1_max':>10} {'MMD²':>12}")
+            lines.append(f"  │  {'─'*25} {'─'*8} {'─'*8} {'─'*10} {'─'*10} {'─'*10} {'─'*12}")
+
+            for _, row in df_s.iterrows():
+                if np.isnan(row.get('W1_Mean', np.nan)):
+                    lines.append(f"  │  {row['Class']:<25} {row['N_Real']:>8,} "
+                                 f"{row['N_Synthetic']:>8,}  (insuficientes samples)")
+                else:
+                    lines.append(f"  │  {row['Class']:<25} {row['N_Real']:>8,} "
+                                 f"{row['N_Synthetic']:>8,} {row['W1_Mean']:>10.6f} "
+                                 f"{row['W1_Median']:>10.6f} {row['W1_Max']:>10.6f} "
+                                 f"{row['MMD2']:>12.8f}")
+
+            # Estadísticos agregados
+            df_valid = df_s.dropna(subset=['W1_Mean'])
+            if len(df_valid) > 0:
+                lines.append(f"  │")
+                lines.append(f"  │  ── Summary agregado ──")
+                lines.append(f"  │  W₁ Mean (proaverage classs):  {df_valid['W1_Mean'].mean():.6f}")
+                lines.append(f"  │  W₁ Mean (mejor class):      {df_valid['W1_Mean'].min():.6f}  "
+                             f"({df_valid.loc[df_valid['W1_Mean'].idxmin(), 'Class']})")
+                lines.append(f"  │  W₁ Mean (peor class):       {df_valid['W1_Mean'].max():.6f}  "
+                             f"({df_valid.loc[df_valid['W1_Mean'].idxmax(), 'Class']})")
+                lines.append(f"  │  MMD² (proaverage classs):     {df_valid['MMD2'].mean():.8f}")
+                lines.append(f"  │  MMD² (mejor class):         {df_valid['MMD2'].min():.8f}  "
+                             f"({df_valid.loc[df_valid['MMD2'].idxmin(), 'Class']})")
+                lines.append(f"  │  MMD² (peor class):          {df_valid['MMD2'].max():.8f}  "
+                             f"({df_valid.loc[df_valid['MMD2'].idxmax(), 'Class']})")
+
+            lines.append(f"  └{'─' * 90}")
+
+    # --- Table summary comparative entre datasets synthetics ---
+    lines.append("\n\n" + "=" * 120)
+    lines.append("  COMPARATIVE SUMMARY TABLE")
+    lines.append("=" * 120)
+
+    summary_rows = []
+    for ds_name in df_all['Dataset'].unique():
+        df_ds = df_all[df_all['Dataset'] == ds_name]
+        for synth_name in df_ds['Synthetic_Dataset'].unique():
+            df_s = df_ds[(df_ds['Synthetic_Dataset'] == synth_name)].dropna(subset=['W1_Mean'])
+            if len(df_s) > 0:
+                summary_rows.append({
+                    'Dataset': ds_name,
+                    'Synthetic': synth_name,
+                    'Classs': len(df_s),
+                    'W1_Mean_Avg': df_s['W1_Mean'].mean(),
+                    'W1_Mean_Max': df_s['W1_Mean'].max(),
+                    'MMD2_Avg': df_s['MMD2'].mean(),
+                    'MMD2_Max': df_s['MMD2'].max(),
+                })
+
+    if summary_rows:
+        lines.append(f"\n  {'Dataset':<16} {'Sintético':<30} {'#Cls':>5} "
+                     f"{'W1_avg':>10} {'W1_worst':>10} {'MMD²_avg':>12} {'MMD²_worst':>12}")
+        lines.append(f"  {'─'*16} {'─'*30} {'─'*5} {'─'*10} {'─'*10} {'─'*12} {'─'*12}")
+        for r in summary_rows:
+            lines.append(f"  {r['Dataset']:<16} {r['Synthetic']:<30} {r['Classs']:>5} "
+                         f"{r['W1_Mean_Avg']:>10.6f} {r['W1_Mean_Max']:>10.6f} "
+                         f"{r['MMD2_Avg']:>12.8f} {r['MMD2_Max']:>12.8f}")
+
+    # --- Interpretación ---
+    lines.append("\n\n" + "=" * 120)
+    lines.append("  GUÍA DE INTERPRETACIÓN")
+    lines.append("=" * 120)
+    lines.append("  W₁ Mean (proaverage por feature):")
+    lines.append("    < 0.01  →  Excelente fidelidad (distribuciones prácticamente idénticas)")
+    lines.append("    < 0.05  →  Buena fidelidad")
+    lines.append("    < 0.10  →  Fidelidad aceptable")
+    lines.append("    > 0.10  →  Diferencia significativa entre real y synthetic")
+    lines.append("")
+    lines.append("  MMD² (multivariante):")
+    lines.append("    < 0.001  →  Distribuciones muy similares (incluidas correlaciones)")
+    lines.append("    < 0.01   →  Similitud razonable")
+    lines.append("    < 0.05   →  Diferencia moderada")
+    lines.append("    > 0.05   →  Diferencia sustancial en estructura multivariante")
+
+    lines.append("\n" + "=" * 120)
+
+    summary_texto = "\n".join(lines)
+
+    with open(os.path.join(output_dir, 'RESUMEN_MATH_ANALYSIS.txt'), 'w') as f:
+        f.write(summary_texto)
+
+    print(f"\n  Summary saved en: {os.path.join(output_dir, 'RESUMEN_MATH_ANALYSIS.txt')}")
+    print("\n" + summary_texto)
+
+    return summary_texto
+
+
+# ============================================================
+# Main
+# ============================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Análisis Matemático: Wasserstein + MMD — Real vs Synthetic',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Ejemplos:
+    python 7_math_analysis.py                  # Todos los datasets
+    python 7_math_analysis.py --dataset cicids # Solo CIC-IDS2017
+    python 7_math_analysis.py --dataset unsw   # Solo UNSW-NB15
+    python 7_math_analysis.py --dataset edge   # Solo Edge-IIoT 2022
+        """
+    )
+    parser.add_argument('--dataset', '-d', type=str, default=None,
+                        choices=['cicids', 'unsw', 'edge', 'all'],
+                        help='Dataset a analizar (default: all)')
+
+    args = parser.parse_args()
+
+    print("=" * 100)
+    print(" " * 15 + "ANÁLISIS MATEMÁTICO: WASSERSTEIN + MMD")
+    print(" " * 15 + "Data Reales vs Data Sintéticos (WGAN)")
+    print(" " * 35 + f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 100)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Determinar qué datasets analizar
+    if args.dataset is None or args.dataset == 'all':
+        datasets_to_run = list(DATASETS_CONFIG.keys())
+    else:
+        datasets_to_run = [args.dataset]
+
+    all_results = []
+
+    for ds_key in datasets_to_run:
+        config = DATASETS_CONFIG[ds_key]
+
+        if not os.path.exists(config['real_path']):
+            print(f"\n  [SKIP] {config['nombre']}: archivo real no encontrado ({config['real_path']})")
+            continue
+
+        if not os.path.exists(config['synth_dir']):
+            print(f"\n  [SKIP] {config['nombre']}: directorio synthetic no encontrado ({config['synth_dir']})")
+            continue
+
+        results = analizar_dataset(ds_key, config)
+        if results:
+            all_results.extend(results)
+
+    if not all_results:
+        print("\n  No se pudieron generar results.")
+        return
+
+    # --- Guardar CSV detallado ---
+    # Separar columnas base de columnas W1 por feature
+    base_cols = ['Dataset', 'Synthetic_Dataset', 'Class', 'N_Real', 'N_Synthetic',
+                 'W1_Mean', 'W1_Median', 'W1_Max', 'W1_Std', 'MMD2']
+    df_results = pd.DataFrame(all_results)
+
+    # CSV summary (solo metrics agregadas)
+    df_summary = df_results[base_cols].copy()
+    df_summary.to_csv(os.path.join(OUTPUT_DIR, 'wasserstein_mmd_summary.csv'), index=False)
+    print(f"\n  CSV summary: {os.path.join(OUTPUT_DIR, 'wasserstein_mmd_summary.csv')}")
+
+    # CSV detallado (incluye W1 por feature)
+    df_results.to_csv(os.path.join(OUTPUT_DIR, 'wasserstein_mmd_detailed.csv'), index=False)
+    print(f"  CSV detallado: {os.path.join(OUTPUT_DIR, 'wasserstein_mmd_detailed.csv')}")
+
+    # --- Generar summary TXT ---
+    generar_summary_txt(all_results, OUTPUT_DIR)
+
+    print(f"\n  Todos los results saveds en: {OUTPUT_DIR}")
+    print("  Finalizado.")
+
+
+if __name__ == "__main__":
+    main()
