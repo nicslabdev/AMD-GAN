@@ -1,9 +1,11 @@
 # AMD-GAN: Class-Specific Adaptive GANs for Configurable Synthetic Traffic and Imbalance Correction
 
+<b>Estos resultados han sido (parcialmente) financiados por la Cátedra Internacional UMA 2023, la cual forma parte del Programa Global de Innovación en Seguridad para la promoción de Cátedras de Ciberseguridad en España financiado por la Unión Europea Fondos NextGeneration-EU, a través del Instituto Nacional de Ciberseguridad (INCIBE).</b>
+
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![TensorFlow 2.x](https://img.shields.io/badge/TensorFlow-2.x-orange.svg)](https://www.tensorflow.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![DOI](https://zenodo.org/badge/1150104328.svg)](https://doi.org/10.5281/zenodo.18488998)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18488999.svg)](https://doi.org/10.5281/zenodo.18488999)
 
 This repository contains the implementation of **AMD-GAN**, a novel framework for generating synthetic network traffic using Class-Specific Wasserstein GANs with Gradient Penalty (WGAN-GP). The system is designed to address class imbalance in Network Intrusion Detection Systems (NIDS) by generating high-quality synthetic samples for minority attack classes.
 
