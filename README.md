@@ -5,7 +5,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![TensorFlow 2.x](https://img.shields.io/badge/TensorFlow-2.x-orange.svg)](https://www.tensorflow.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18488999.svg)](https://doi.org/10.5281/zenodo.18488999)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19212815.svg)](https://doi.org/10.5281/zenodo.19212815)
 
 This repository contains the implementation of **AMD-GAN**, a novel framework for generating synthetic network traffic using Class-Specific Wasserstein GANs with Gradient Penalty (WGAN-GP). The system is designed to address class imbalance in Network Intrusion Detection Systems (NIDS) across multiple datasets (CIC-IDS2017, UNSW-NB15, and Edge-IIoT 2022) by generating high-quality synthetic samples for minority attack classes.
 
