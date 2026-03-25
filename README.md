@@ -50,114 +50,150 @@ The framework uses **Wasserstein GAN with Gradient Penalty (WGAN-GP)** with the 
 
 ## Repository Structure
 
-The workflow is numbered sequentially (from `1_*` to `10_*`) for a clear, step-by-step pipeline:
+The workflow is organized into three main directories for clarity and maintainability:
 
 ```text
 AMD-GAN/
+├── scripts/
+│   ├── 01_gan_wgan_cicids2017.py
+│   ├── 01_gan_wgan_edgeiiot.py
+│   ├── 01_gan_wgan_unsw.py
+│   ├── 02_generate_synthetic_data_cicids2017.py
+│   ├── 02_generate_synthetic_data_edgeiiot.py
+│   └── 02_generate_synthetic_data_unsw.py
 │
-├── 1_gan_wgan.py                        # WGAN-GP training for CIC-IDS2017
-├── 1_1_gan_wgan_unsw.py                 # WGAN-GP training for UNSW-NB15
-├── 1_2_gan_wgan_edgeiiot.py             # WGAN-GP training for Edge-IIoT
+├── tests/
+│   ├── 03_oversampling_cicids2017.py
+│   ├── 03_oversampling_edgeiiot.py
+│   ├── 03_oversampling_unsw.py
+│   ├── 04_tstr_cicids2017.py
+│   ├── 04_tstr_edgeiiot.py
+│   ├── 04_tstr_unsw.py
+│   ├── 05_stress_test_nids.py
+│   ├── 06_math_analysis.py
+│   └── 07_load_test.py
 │
-├── 2_generate_synthetic_dataset.py      # Synthetic data generation (CIC-IDS2017)
-├── 2_1_generate_synthetic_dataset_unsw.py
-├── 2_2_generate_synthetic_dataset_edgeiiot.py
+├── xai/
+│   ├── 08_shap_generator_multi.py
+│   ├── 09_shap_rank_multi.py
+│   ├── 10_lime_soc_attribution.py
+│   └── 11_tsne_multi.py
 │
-├── 3_experiment_oversampling_comparison.py # Oversampling technique comparison
-├── 3_1experiment_oversampling_unsw.py
-├── 3_2experiment_oversampling_edgeiiot.py
+├── data/                                # Datasets (create this directory)
+│   ├── CIC-IDS2017.csv                  # Download from official sources
+│   ├── UNSW-NB15.csv
+│   └── Edge-IIoT.csv
 │
-├── 4_tstr.py                            # TSTR evaluation (Unified)
-├── 4_1_tstr_unsw.py
-├── 4_2_tstr_edgeiiot.py
+├── outputs/                             # Generated during execution
+│   ├── models/                          # Trained GAN models
+│   ├── synthetic_data/                  # Generated synthetic samples
+│   ├── results/                         # Evaluation metrics
+│   └── plots/                           # Visualizations
 │
-├── 5_visualize_results.py               # Generates TSTR/oversampling visualizations
-├── 6_stress_test_nids.py                # Audits NIDS vs extreme adversarial traffic
-├── 7_math_analysis.py                   # Calculates Wasserstein distance & MMD
-├── 8_load_test.py                       # RAM/VRAM/CPU/Time computational load test
-├── 9_ablation.py                        # Ablation study: Configuration vs Cardinality
-└── 10_figure_summary.py                 # Summary figures generation
+├── .env.example                         # Configuration template
+├── .env                                 # Local configuration (not committed)
+├── LICENSE
+├── README.md
+└── requirements.txt
 ```
 
 ## Installation
 
-### Requirements
+### Prerequisites
+- Python ≥ 3.8
+- pip or conda
 
+### Quick Setup
+
+1. **Clone the repository**
 ```bash
-pip install numpy pandas polars scikit-learn tensorflow lightgbm xgboost imbalanced-learn matplotlib scipy psutil pynvml
+git clone https://github.com/yourusername/AMD-GAN.git
+cd AMD-GAN
 ```
 
-### Dependencies
-- Python ≥ 3.8
-- TensorFlow ≥ 2.x
-- NumPy, Pandas, Polars
-- Scikit-learn
-- LightGBM, XGBoost
-- imbalanced-learn (for comparison experiments)
-- Matplotlib, Scipy
-- `psutil`, `pynvml` (optional, for resource monitoring during computational load tests)
+2. **Create virtual environment (recommended)**
+```bash
+python -m venv env
+source env/bin/activate  # On Windows: env\Scripts\activate
+```
+
+3. **Install dependencies**
+```bash
+pip install -r requirements.txt
+```
+
+4. **Configure environment**
+```bash
+cp .env.example .env
+# Edit .env with your dataset paths and settings
+```
+
+5. **Prepare datasets**
+Create a `data/` directory and download datasets:
+- CIC-IDS2017: https://www.unb.ca/cic/datasets/ids-2017.html
+- UNSW-NB15: https://www.unsw.adfa.edu.au/unsw-canberra-cyber/cybersecurity/UNSW-NB15-Datasets/
+- Edge-IIoT: https://www.kaggle.com/datasets/agungprabowo/edge-iiot-dataset
 
 ## Usage
 
-The scripts are organized sequentially from 1 to 10. Below is the general execution workflow. 
-*Note: Depending on the dataset you are studying, run the corresponding `_unsw.py`, `_edgeiiot.py`, or base `.py` versions.*
+### Step-by-Step Workflow
 
-### 1. Training WGAN-GP Models (`1_*.py`)
-Train class-specific WGAN-GP models with adaptive configurations assigned by dataset size:
+The scripts are numbered sequentially for a complete pipeline:
 
+**Phase 1: Model Training (scripts/)**
 ```bash
-# Train on CIC-IDS2017
-python 1_gan_wgan.py --classes Bot "Web Attack"
-
-# Train on UNSW-NB15 or Edge-IIoT
-python 1_1_gan_wgan_unsw.py --all
-python 1_2_gan_wgan_edgeiiot.py --all
+cd scripts/
+python 01_gan_wgan_cicids2017.py      # Train WGAN-GP for CIC-IDS2017
+python 01_gan_wgan_unsw.py            # Train WGAN-GP for UNSW-NB15
+python 01_gan_wgan_edgeiiot.py        # Train WGAN-GP for Edge-IIoT
 ```
 
-**Configuration tiers based on class size:**
-
-| Class Size | Batch Size | Epochs | Lambda GP | Oversample Factor |
-|------------|------------|--------|-----------|-------------------|
-| Large | 128 | 15,000 | 10.0 | 1x |
-| Small | 32 | 25,000 | 15.0 | 10x |
-| Very Small | 16 | 30,000 | 20.0 | 20x |
-
-### 2. Generating Synthetic Datasets (`2_*.py`)
-Produce synthetic data pools mapping the distributions learned by the WGAN-GP models:
-
+**Phase 2: Generate Synthetic Data (scripts/)**
 ```bash
-python 2_generate_synthetic_dataset.py --balanced 10000
-python 2_1_generate_synthetic_dataset_unsw.py --benign 50000 --exploits 10000
+python 02_generate_synthetic_data_cicids2017.py   # Generate synthetic samples
+python 02_generate_synthetic_data_unsw.py
+python 02_generate_synthetic_data_edgeiiot.py
 ```
 
-### 3. Oversampling Comparison Experiment (`3_*.py`)
-Evaluate AMD-GAN data against classical oversamplers (SMOTE, ADASYN, Random OverSampler, etc.) training top classifiers:
+**Phase 3: Evaluation & Comparison (tests/)**
 ```bash
-python 3_experiment_oversampling_comparison.py
+cd ../tests/
+python 03_oversampling_cicids2017.py     # Run oversampling experiments
+python 04_tstr_cicids2017.py             # TSTR evaluation
+python 05_stress_test_nids.py            # Robustness testing
+python 06_math_analysis.py               # Distribution analysis
+python 07_load_test.py                   # Performance profiling
 ```
 
-### 4. Train-Synthetic-Test-Real (TSTR) Evaluation (`4_*.py`)
-Quantify generalizability by training models exclusively on synthetic data, then testing their effectiveness on the real unseen testing hold-out sets (TRTR vs. TSTR).
+**Phase 4: Explainability Analysis (xai/)**
 ```bash
-python 4_tstr.py
-python 4_1_tstr_unsw.py
+cd ../xai/
+python 08_shap_generator_multi.py        # Feature importance (SHAP)
+python 09_shap_rank_multi.py             # SHAP ranking overlap analysis
+python 10_lime_soc_attribution.py        # Local interpretability (LIME)
+python 11_tsne_multi.py                  # Dimensionality reduction comparison
 ```
 
-### 5. Utilities, Stress Tests & Analysis (`5_*.py` to `10_*.py`)
+### Configuration
 
-- **Results Visualization:** Generate TSTR publication figures:
-  `python 5_visualize_results.py`
-  
-- **Adversarial Stress Testing:** Subject a real-trained model against massive GAN-generated extreme edge-cases, finding breakpoints:
-  `python 6_stress_test_nids.py`
-  
-- **Mathematical Distances:** Calculates empirical Wasserstein 1D mean & MMD² matching algorithms:
-  `python 7_math_analysis.py`
-  
-- **Hardware Load and Ablation:** Hardware costs and justifying hyper-parameters:
-  `python 8_load_test.py`
-  `python 9_ablation.py --parallel --gpus 0,1,2`
-  `python 10_figure_summary.py`
+Edit `.env` file to customize:
+- Dataset paths
+- Output directories
+- Training hyperparameters
+- GPU/resource settings
+- Logging levels
+
+### Example: Run complete pipeline for one dataset
+```bash
+# CIC-IDS2017
+python scripts/01_gan_wgan_cicids2017.py
+python scripts/02_generate_synthetic_data_cicids2017.py
+python tests/03_oversampling_cicids2017.py
+python tests/04_tstr_cicids2017.py
+python tests/05_stress_test_nids.py
+python tests/06_math_analysis.py
+python xai/08_shap_generator_multi.py
+```
 
 ## License
 

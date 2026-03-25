@@ -3,6 +3,15 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Environment and configuration
+.env
+.env.local
+.env.*.local
+.env*.py
+
+# Helper scripts
+clean_comments.py
+
 # C extensions
 *.so
 
