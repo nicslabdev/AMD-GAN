@@ -1,5 +1,5 @@
 # AMD-GAN: Class-Specific Adaptive GANs for Configurable Synthetic Traffic and Imbalance Correction
-
+![Fondos_INCIBE](https://github.com/nicslabdev/AMD-GAN/raw/main/logo_fondos_incibe.png)
 <b>Estos resultados han sido (parcialmente) financiados por la Cátedra Internacional UMA 2023, la cual forma parte del Programa Global de Innovación en Seguridad para la promoción de Cátedras de Ciberseguridad en España financiado por la Unión Europea Fondos NextGeneration-EU, a través del Instituto Nacional de Ciberseguridad (INCIBE).</b>
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
